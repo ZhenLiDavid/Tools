@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "29275518250",
+    "project_id": "tools-7c5f1",
+    "storage_bucket": "tools-7c5f1.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:29275518250:android:9df0a5e362ad8b42ff9a53",
+        "android_client_info": {
+          "package_name": "com.zhentec.tools"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAhvzJDWbMz3Ervm3S67o5ZSitJsBh5Q3A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,19 +1,31 @@
+import com.google.firebase.appdistribution.gradle.firebaseAppDistribution
+import java.util.Properties
+
+val localProperties = Properties().apply {
+    rootProject.file("local.properties")
+        .takeIf { it.isFile }
+        ?.inputStream()
+        ?.use { load(it) }
+}
+val firebaseTesters = providers.gradleProperty("firebaseTesters").orNull
+    ?: localProperties.getProperty("firebaseTesters")
+
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.firebase.appdistribution)
+    alias(libs.plugins.google.services)
     alias(libs.plugins.kotlin.compose)
 }
 
 android {
     namespace = "com.zhentech.tools"
     compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
+        version = release(37)
     }
 
     defaultConfig {
-        applicationId = "com.zhentech.tools"
-        minSdk = 24
+        applicationId = "com.zhentec.tools"
+        minSdk = 31
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
@@ -21,7 +33,22 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    lint {
+        disable += "OldTargetApi"
+    }
+
     buildTypes {
+        debug {
+            firebaseAppDistribution {
+                artifactType = "APK"
+                releaseNotes = providers.gradleProperty("firebaseReleaseNotes")
+                    .orElse("Private development build")
+                    .get()
+                firebaseTesters
+                    ?.takeIf(String::isNotBlank)
+                    ?.let { testers = it }
+            }
+        }
         release {
             optimization {
                 enable = false
