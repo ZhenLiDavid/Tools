@@ -1,6 +1,5 @@
 package com.zhentech.tools
 
-import android.content.Intent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -13,7 +12,7 @@ class HfpStreamingControllerTest {
         val store = StreamingStateStore()
         val controller = HfpStreamingController(gateway, store)
 
-        controller.start(1, Intent())
+        controller.start()
 
         assertFalse(gateway.startCalled)
         assertEquals(StreamingState.Off, controller.state.value)
@@ -25,7 +24,7 @@ class HfpStreamingControllerTest {
         val store = StreamingStateStore()
         val controller = HfpStreamingController(gateway, store)
 
-        controller.start(1, Intent())
+        controller.start()
         store.markStarted()
         controller.stop()
 
@@ -34,20 +33,34 @@ class HfpStreamingControllerTest {
         assertEquals(StreamingState.Off, controller.state.value)
     }
 
+    @Test
+    fun repeatedStartRequestsOnlyOpenOneDirectRoute() {
+        val gateway = FakeGateway(deviceAvailable = true)
+        val controller = HfpStreamingController(gateway, StreamingStateStore())
+
+        controller.start()
+        controller.start()
+
+        assertEquals(1, gateway.startCount)
+    }
+
     private class FakeGateway(
         private val deviceAvailable: Boolean,
     ) : HfpStreamingGateway {
-        var startCalled = false
+        var startCount = 0
         var stopCalled = false
 
         override fun hasAvailableHfpDevice(): Boolean = deviceAvailable
 
-        override fun start(resultCode: Int, projectionData: Intent) {
-            startCalled = true
+        override fun start() {
+            startCount += 1
         }
 
         override fun stop() {
             stopCalled = true
         }
+
+        val startCalled: Boolean
+            get() = startCount > 0
     }
 }

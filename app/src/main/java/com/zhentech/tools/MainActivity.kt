@@ -1,10 +1,8 @@
 package com.zhentech.tools
 
 import android.Manifest
-import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.projection.MediaProjectionManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
@@ -54,23 +52,14 @@ import com.zhentech.tools.ui.theme.ToolsTheme
 class MainActivity : ComponentActivity() {
     private lateinit var streamingController: HfpStreamingController
     private lateinit var workSimController: WorkSimController
-    private var startRequestInProgress = false
+    private var permissionRequestInProgress = false
     private var showWorkSimEditor by mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions(),
-    ) { grants ->
-        if (grants.values.all { it }) launchMediaProjectionRequest()
-    }
-
-    private val mediaProjectionLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult(),
-    ) { result ->
-        startRequestInProgress = false
-        val projectionData = result.data
-        if (result.resultCode == Activity.RESULT_OK && projectionData != null) {
-            streamingController.start(result.resultCode, projectionData)
-        }
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        permissionRequestInProgress = false
+        if (granted) streamingController.start()
     }
 
     private val phoneStatePermissionLauncher = registerForActivityResult(
@@ -117,23 +106,13 @@ class MainActivity : ComponentActivity() {
             streamingController.stop()
             return
         }
-        if (startRequestInProgress || !streamingController.hasAvailableHfpDevice()) return
-        if (hasRequiredPermissions()) {
-            launchMediaProjectionRequest()
+        if (permissionRequestInProgress) return
+        if (hasBluetoothPermission()) {
+            streamingController.start()
         } else {
-            permissionLauncher.launch(REQUIRED_PERMISSIONS)
+            permissionRequestInProgress = true
+            permissionLauncher.launch(Manifest.permission.BLUETOOTH_CONNECT)
         }
-    }
-
-    private fun hasRequiredPermissions(): Boolean = REQUIRED_PERMISSIONS.all {
-        checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED
-    }
-
-    private fun launchMediaProjectionRequest() {
-        if (startRequestInProgress || !streamingController.hasAvailableHfpDevice()) return
-        startRequestInProgress = true
-        val projectionManager = getSystemService(MediaProjectionManager::class.java)
-        mediaProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
 
     private fun onWorkSimTileClick() {
@@ -160,12 +139,9 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    companion object {
-        private val REQUIRED_PERMISSIONS = arrayOf(
-            Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.RECORD_AUDIO,
-        )
-    }
+    private fun hasBluetoothPermission(): Boolean =
+        checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) ==
+            PackageManager.PERMISSION_GRANTED
 }
 
 @Composable

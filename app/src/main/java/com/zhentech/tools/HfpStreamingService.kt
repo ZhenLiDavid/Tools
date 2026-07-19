@@ -4,21 +4,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
-import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
-import android.media.AudioAttributes
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
-import android.media.AudioFormat
 import android.media.AudioManager
-import android.media.AudioPlaybackCaptureConfiguration
-import android.media.AudioRecord
-import android.media.AudioTrack
-import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -31,31 +22,24 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
-import kotlin.math.max
 
 class HfpStreamingService : Service() {
-    private val streamingExecutor = Executors.newSingleThreadExecutor()
+    private val routingExecutor = Executors.newSingleThreadExecutor()
     private val resourceLock = Any()
     private val sessionId = AtomicLong(0)
     private val stopping = AtomicBoolean(false)
     private val callInterrupted = AtomicBoolean(false)
 
     private lateinit var audioManager: AudioManager
-    private lateinit var projectionManager: MediaProjectionManager
 
-    private var audioRecord: AudioRecord? = null
-    private var audioTrack: AudioTrack? = null
-    private var mediaProjection: MediaProjection? = null
     private var selectedDevice: AudioDeviceInfo? = null
     private var previousAudioMode: Int? = null
+    private var routeAnchor: CommunicationRouteAnchor? = null
+    private var ownsAudioMode = false
+    private var communicationDeviceRequested = false
+    private var routeConfirmed = false
     private var audioMonitoringRegistered = false
     private var serviceIsForeground = false
-
-    private val projectionCallback = object : MediaProjection.Callback() {
-        override fun onStop() {
-            stopStreaming()
-        }
-    }
 
     private val audioDeviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesRemoved(removedDevices: Array<AudioDeviceInfo>) {
@@ -66,9 +50,32 @@ class HfpStreamingService : Service() {
         }
     }
 
+    private val communicationDeviceChangedListener =
+        AudioManager.OnCommunicationDeviceChangedListener { current ->
+            val expectedDeviceId = synchronized(resourceLock) {
+                selectedDevice?.id?.takeIf { routeConfirmed }
+            } ?: return@OnCommunicationDeviceChangedListener
+            if (current?.id != expectedDeviceId) {
+                stopStreaming()
+            }
+        }
+
     private val modeChangedListener = AudioManager.OnModeChangedListener { mode ->
-        if (mode == AudioManager.MODE_IN_CALL && isSessionActive()) {
+        val routingState = synchronized(resourceLock) {
+            Triple(selectedDevice != null, routeConfirmed, ownsAudioMode)
+        }
+        if (!routingState.first) return@OnModeChangedListener
+
+        if (HfpRoutingPolicy.isPhoneCallMode(mode)) {
             callInterrupted.set(true)
+            stopStreaming()
+        } else if (
+            HfpRoutingPolicy.shouldStopForModeChange(
+                routeConfirmed = routingState.second,
+                ownsAudioMode = routingState.third,
+                mode = mode,
+            )
+        ) {
             stopStreaming()
         }
     }
@@ -76,52 +83,54 @@ class HfpStreamingService : Service() {
     override fun onCreate() {
         super.onCreate()
         audioManager = getSystemService(AudioManager::class.java)
-        projectionManager = getSystemService(MediaProjectionManager::class.java)
         createNotificationChannel()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                val projectionData = intent.projectionData() ?: run {
-                    stopStreaming()
-                    return START_NOT_STICKY
-                }
-                val projectionResultCode = intent.getIntExtra(
-                    EXTRA_PROJECTION_RESULT_CODE,
-                    android.app.Activity.RESULT_CANCELED,
-                )
-                val newSessionId = beginNewSession()
-                startAsForegroundService()
-                streamingExecutor.execute {
-                    runSession(newSessionId, projectionResultCode, projectionData)
-                }
+                setStreamingRequested(true)
+                launchRoutingSession()
             }
 
-            ACTION_STOP -> stopStreaming()
+            ACTION_STOP -> stopStreaming(clearRequest = true)
+
+            null -> {
+                if (isStreamingRequested()) {
+                    launchRoutingSession()
+                } else {
+                    stopSelf()
+                }
+            }
         }
-        return START_NOT_STICKY
+        return if (isStreamingRequested()) START_STICKY else START_NOT_STICKY
     }
 
     override fun onDestroy() {
-        stopStreaming(stopSelfAfterCleanup = false)
-        streamingExecutor.shutdownNow()
+        stopStreaming(stopSelfAfterCleanup = false, clearRequest = false)
+        routingExecutor.shutdownNow()
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun launchRoutingSession() {
+        val newSessionId = beginNewSession()
+        startAsForegroundService()
+        routingExecutor.execute { startRoute(newSessionId) }
+    }
+
     private fun beginNewSession(): Long {
-        stopStreaming(stopSelfAfterCleanup = false)
+        stopStreaming(stopSelfAfterCleanup = false, clearRequest = false)
         callInterrupted.set(false)
         return sessionId.incrementAndGet()
     }
 
-    private fun runSession(id: Long, projectionResultCode: Int, projectionData: Intent) {
+    private fun startRoute(id: Long) {
+        var started = false
         try {
-            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                return
-            }
+            if (!HfpRoutingPolicy.canStart(audioManager.mode)) return
+
             val device = audioManager.availableCommunicationDevices.firstOrNull {
                 it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
             } ?: return
@@ -131,102 +140,43 @@ class HfpStreamingService : Service() {
                 selectedDevice = device
                 previousAudioMode = audioManager.mode
             }
-            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            if (!registerAudioMonitoring(id)) return
 
-            if (!audioManager.setCommunicationDevice(device) || !awaitSelectedDevice(device, id)) return
-
-            val projection = projectionManager.getMediaProjection(projectionResultCode, projectionData)
-                ?: return
-            projection.registerCallback(projectionCallback, Handler(Looper.getMainLooper()))
+            val anchor = CommunicationRouteAnchor.create()
             synchronized(resourceLock) {
-                mediaProjection = projection
+                routeAnchor = anchor
             }
-
-            val captureConfiguration = AudioPlaybackCaptureConfiguration.Builder(projection)
-                .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
-                .addMatchingUsage(AudioAttributes.USAGE_GAME)
-                .addMatchingUsage(AudioAttributes.USAGE_UNKNOWN)
-                .build()
-            val audioFormat = AudioFormat.Builder()
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(SAMPLE_RATE_HZ)
-                .setChannelMask(AudioFormat.CHANNEL_IN_STEREO)
-                .build()
-            val outputFormat = AudioFormat.Builder()
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setSampleRate(SAMPLE_RATE_HZ)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
-                .build()
-            val inputBufferSize = AudioRecord.getMinBufferSize(
-                SAMPLE_RATE_HZ,
-                AudioFormat.CHANNEL_IN_STEREO,
-                AudioFormat.ENCODING_PCM_16BIT,
-            )
-            val outputBufferSize = AudioTrack.getMinBufferSize(
-                SAMPLE_RATE_HZ,
-                AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-            )
-            check(inputBufferSize > 0 && outputBufferSize > 0)
-            val inputBufferBytes = max(inputBufferSize, outputBufferSize * 2)
-            val outputBufferBytes = max(outputBufferSize, inputBufferBytes / 2)
-            val record = AudioRecord.Builder()
-                .setAudioFormat(audioFormat)
-                .setBufferSizeInBytes(inputBufferBytes)
-                .setAudioPlaybackCaptureConfig(captureConfiguration)
-                .build()
-            val track = AudioTrack.Builder()
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                        .build(),
-                )
-                .setAudioFormat(outputFormat)
-                .setBufferSizeInBytes(outputBufferBytes)
-                .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
-            check(record.state == AudioRecord.STATE_INITIALIZED)
-            check(track.state == AudioTrack.STATE_INITIALIZED)
-            if (!isCurrentSession(id)) {
-                record.release()
-                track.release()
-                return
-            }
-
-            synchronized(resourceLock) {
-                audioRecord = record
-                audioTrack = track
-            }
-            registerAudioMonitoring()
-            record.startRecording()
-            track.play()
+            anchor.start()
             if (!isCurrentSession(id)) return
 
-            AppStreamingState.store.markStarted()
-            copyAudioUntilStopped(id, record, track, inputBufferBytes)
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            synchronized(resourceLock) {
+                ownsAudioMode = audioManager.mode == AudioManager.MODE_IN_COMMUNICATION
+            }
+            if (!synchronized(resourceLock) { ownsAudioMode } || !isCurrentSession(id)) return
+
+            if (!audioManager.setCommunicationDevice(device)) return
+            synchronized(resourceLock) {
+                communicationDeviceRequested = true
+            }
+            if (!awaitSelectedDevice(device, id) || !isCurrentSession(id)) return
+
+            started = synchronized(resourceLock) {
+                if (!isCurrentSession(id)) {
+                    false
+                } else {
+                    routeConfirmed = true
+                    AppStreamingState.store.markStarted()
+                    true
+                }
+            }
+            if (started) {
+                anchor.pumpWhile { isCurrentSession(id) }
+            }
         } catch (exception: Exception) {
-            Log.w(TAG, "Unable to start HFP streaming", exception)
+            Log.w(TAG, "Unable to start direct HFP routing", exception)
         } finally {
             if (isCurrentSession(id)) stopStreaming()
-        }
-    }
-
-    private fun copyAudioUntilStopped(
-        id: Long,
-        record: AudioRecord,
-        track: AudioTrack,
-        bufferSize: Int,
-    ) {
-        val inputBuffer = ByteArray(bufferSize)
-        val outputBuffer = ByteArray(bufferSize / 2)
-        val processor = SpeechClarityProcessor()
-        while (isCurrentSession(id)) {
-            val read = record.read(inputBuffer, 0, inputBuffer.size, AudioRecord.READ_BLOCKING)
-            if (read <= 0) return
-            val processedBytes = processor.processStereoPcm16(inputBuffer, read, outputBuffer)
-            val written = track.write(outputBuffer, 0, processedBytes, AudioTrack.WRITE_BLOCKING)
-            if (written < 0) return
         }
     }
 
@@ -246,43 +196,56 @@ class HfpStreamingService : Service() {
         }
     }
 
-    private fun registerAudioMonitoring() {
-        if (audioMonitoringRegistered) return
+    private fun registerAudioMonitoring(id: Long): Boolean = synchronized(resourceLock) {
+        if (!isCurrentSession(id)) return@synchronized false
+        if (audioMonitoringRegistered) return@synchronized true
+
         audioManager.registerAudioDeviceCallback(audioDeviceCallback, Handler(Looper.getMainLooper()))
+        audioManager.addOnCommunicationDeviceChangedListener(
+            mainExecutor,
+            communicationDeviceChangedListener,
+        )
         audioManager.addOnModeChangedListener(mainExecutor, modeChangedListener)
         audioMonitoringRegistered = true
+        true
     }
 
-    private fun stopStreaming(stopSelfAfterCleanup: Boolean = true) {
+    private fun stopStreaming(
+        stopSelfAfterCleanup: Boolean = true,
+        clearRequest: Boolean = true,
+    ) {
         if (!stopping.compareAndSet(false, true)) return
         try {
+            if (clearRequest) setStreamingRequested(false)
             sessionId.incrementAndGet()
             AppStreamingState.store.markStopped()
 
             val resources = synchronized(resourceLock) {
-                StreamingResources(
-                    record = audioRecord,
-                    track = audioTrack,
-                    projection = mediaProjection,
+                RoutingResources(
                     previousMode = previousAudioMode,
+                    anchor = routeAnchor,
+                    ownsAudioMode = ownsAudioMode,
+                    communicationDeviceRequested = communicationDeviceRequested,
                 ).also {
-                    audioRecord = null
-                    audioTrack = null
-                    mediaProjection = null
                     selectedDevice = null
                     previousAudioMode = null
+                    routeAnchor = null
+                    ownsAudioMode = false
+                    communicationDeviceRequested = false
+                    routeConfirmed = false
                 }
             }
             unregisterAudioMonitoring()
-            runCatching { resources.record?.stop() }
-            runCatching { resources.track?.pause() }
-            runCatching { resources.track?.flush() }
-            runCatching { resources.record?.release() }
-            runCatching { resources.track?.release() }
-            runCatching { resources.projection?.unregisterCallback(projectionCallback) }
-            runCatching { resources.projection?.stop() }
-            runCatching { audioManager.clearCommunicationDevice() }
-            if (!callInterrupted.get() && audioManager.mode == AudioManager.MODE_IN_COMMUNICATION) {
+            resources.anchor?.close()
+            if (resources.communicationDeviceRequested) {
+                runCatching { audioManager.clearCommunicationDevice() }
+            }
+            if (HfpRoutingPolicy.shouldRestorePreviousMode(
+                    ownsAudioMode = resources.ownsAudioMode,
+                    callInterrupted = callInterrupted.get(),
+                    currentMode = audioManager.mode,
+                )
+            ) {
                 resources.previousMode?.let { audioManager.mode = it }
             }
 
@@ -297,17 +260,17 @@ class HfpStreamingService : Service() {
     }
 
     private fun unregisterAudioMonitoring() {
-        if (!audioMonitoringRegistered) return
+        val wasRegistered = synchronized(resourceLock) {
+            audioMonitoringRegistered.also { audioMonitoringRegistered = false }
+        }
+        if (!wasRegistered) return
+
         audioManager.unregisterAudioDeviceCallback(audioDeviceCallback)
+        audioManager.removeOnCommunicationDeviceChangedListener(communicationDeviceChangedListener)
         audioManager.removeOnModeChangedListener(modeChangedListener)
-        audioMonitoringRegistered = false
     }
 
     private fun isCurrentSession(id: Long): Boolean = id == sessionId.get()
-
-    private fun isSessionActive(): Boolean = synchronized(resourceLock) {
-        selectedDevice != null
-    }
 
     private fun startAsForegroundService() {
         ServiceCompat.startForeground(
@@ -315,8 +278,7 @@ class HfpStreamingService : Service() {
             NOTIFICATION_ID,
             createNotification(),
             ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION or
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK,
         )
         serviceIsForeground = true
     }
@@ -347,33 +309,39 @@ class HfpStreamingService : Service() {
         )
         .build()
 
-    private data class StreamingResources(
-        val record: AudioRecord?,
-        val track: AudioTrack?,
-        val projection: MediaProjection?,
+    private data class RoutingResources(
         val previousMode: Int?,
+        val anchor: CommunicationRouteAnchor?,
+        val ownsAudioMode: Boolean,
+        val communicationDeviceRequested: Boolean,
     )
 
-    @Suppress("DEPRECATION")
-    private fun Intent.projectionData(): Intent? = getParcelableExtra(EXTRA_PROJECTION_DATA)
+    private fun setStreamingRequested(requested: Boolean) {
+        getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_STREAMING_REQUESTED, requested)
+            .apply()
+    }
+
+    private fun isStreamingRequested(): Boolean =
+        getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
+            .getBoolean(KEY_STREAMING_REQUESTED, false)
 
     companion object {
         private const val ACTION_START = "com.zhentech.tools.action.START_HFP_STREAMING"
         private const val ACTION_STOP = "com.zhentech.tools.action.STOP_HFP_STREAMING"
-        private const val EXTRA_PROJECTION_DATA = "projection_data"
-        private const val EXTRA_PROJECTION_RESULT_CODE = "projection_result_code"
         private const val NOTIFICATION_CHANNEL_ID = "hfp_streaming"
         private const val NOTIFICATION_ID = 1
+        private const val PREFERENCES_NAME = "hfp_streaming_service"
+        private const val KEY_STREAMING_REQUESTED = "streaming_requested"
         private const val ROUTE_TIMEOUT_SECONDS = 10L
-        private const val SAMPLE_RATE_HZ = 16_000
         private const val TAG = "HfpStreamingService"
 
-        fun start(context: Context, resultCode: Int, projectionData: Intent) {
-            val startIntent = Intent(context, HfpStreamingService::class.java)
-                .setAction(ACTION_START)
-                .putExtra(EXTRA_PROJECTION_RESULT_CODE, resultCode)
-                .putExtra(EXTRA_PROJECTION_DATA, projectionData)
-            ContextCompat.startForegroundService(context, startIntent)
+        fun start(context: Context) {
+            ContextCompat.startForegroundService(
+                context,
+                Intent(context, HfpStreamingService::class.java).setAction(ACTION_START),
+            )
         }
 
         fun stop(context: Context) {
