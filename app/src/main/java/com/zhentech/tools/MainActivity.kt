@@ -5,13 +5,16 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -22,7 +25,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -31,6 +33,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -49,7 +53,9 @@ import com.zhentech.tools.ui.theme.ToolsTheme
 
 class MainActivity : ComponentActivity() {
     private lateinit var streamingController: HfpStreamingController
+    private lateinit var workSimController: WorkSimController
     private var startRequestInProgress = false
+    private var showWorkSimEditor by mutableStateOf(false)
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -67,19 +73,43 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val phoneStatePermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        workSimController.refresh()
+        showWorkSimEditor = true
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         streamingController = HfpStreamingController(AndroidHfpStreamingGateway(applicationContext))
+        workSimController = WorkSimController(applicationContext)
         setContent {
             ToolsTheme {
                 val state by streamingController.state.collectAsState()
+                val workSimState by workSimController.state.collectAsState()
                 ToolsGrid(
                     streamingState = state,
                     onStreamingTileClick = ::onStreamingTileClick,
+                    workSimState = workSimState,
+                    onWorkSimTileClick = ::onWorkSimTileClick,
+                    showWorkSimEditor = showWorkSimEditor,
+                    onWorkSimEditorDismiss = { showWorkSimEditor = false },
+                    onWorkSimScheduleSave = ::onWorkSimScheduleSave,
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::workSimController.isInitialized) workSimController.refresh()
+    }
+
+    override fun onDestroy() {
+        if (::workSimController.isInitialized) workSimController.close()
+        super.onDestroy()
     }
 
     private fun onStreamingTileClick() {
@@ -106,6 +136,30 @@ class MainActivity : ComponentActivity() {
         mediaProjectionLauncher.launch(projectionManager.createScreenCaptureIntent())
     }
 
+    private fun onWorkSimTileClick() {
+        if (isRunningOnEmulator() ||
+            checkSelfPermission(Manifest.permission.READ_PHONE_STATE) == PackageManager.PERMISSION_GRANTED
+        ) {
+            workSimController.refresh()
+            showWorkSimEditor = true
+        } else {
+            phoneStatePermissionLauncher.launch(Manifest.permission.READ_PHONE_STATE)
+        }
+    }
+
+    private fun onWorkSimScheduleSave(schedule: WorkSimSchedule) {
+        showWorkSimEditor = false
+        workSimController.save(schedule)
+        if (schedule.enabled && !workSimController.state.value.preciseSchedulingAvailable) {
+            startActivity(
+                Intent(
+                    Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
+                    Uri.parse("package:$packageName"),
+                ),
+            )
+        }
+    }
+
     companion object {
         private val REQUIRED_PERMISSIONS = arrayOf(
             Manifest.permission.BLUETOOTH_CONNECT,
@@ -118,6 +172,11 @@ class MainActivity : ComponentActivity() {
 internal fun ToolsGrid(
     streamingState: StreamingState,
     onStreamingTileClick: () -> Unit,
+    workSimState: WorkSimUiState = WorkSimUiState(),
+    onWorkSimTileClick: () -> Unit = {},
+    showWorkSimEditor: Boolean = false,
+    onWorkSimEditorDismiss: () -> Unit = {},
+    onWorkSimScheduleSave: (WorkSimSchedule) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val layoutDirection = LocalLayoutDirection.current
@@ -136,11 +195,24 @@ internal fun ToolsGrid(
                 end = innerPadding.calculateEndPadding(layoutDirection) + GRID_PADDING,
                 bottom = innerPadding.calculateBottomPadding() + GRID_PADDING,
             ),
+            horizontalArrangement = Arrangement.spacedBy(GRID_SPACING),
+            verticalArrangement = Arrangement.spacedBy(GRID_SPACING),
         ) {
-            items(items = listOf(streamingState), key = { "hfp-streamer" }) { state ->
-                HfpStreamingTile(state = state, onClick = onStreamingTileClick)
+            item(key = "hfp-streamer") {
+                HfpStreamingTile(state = streamingState, onClick = onStreamingTileClick)
+            }
+            item(key = "work-sim") {
+                WorkSimTile(state = workSimState, onClick = onWorkSimTileClick)
             }
         }
+    }
+
+    if (showWorkSimEditor) {
+        WorkSimEditorSheet(
+            state = workSimState,
+            onDismiss = onWorkSimEditorDismiss,
+            onSave = onWorkSimScheduleSave,
+        )
     }
 }
 
@@ -197,6 +269,7 @@ private fun HfpStreamingTile(
 internal const val GRID_TEST_TAG = "toolsGrid"
 internal const val HFP_STREAMING_TILE_TEST_TAG = "hfpStreamingTile"
 private val GRID_PADDING = 16.dp
+private val GRID_SPACING = 12.dp
 
 @Preview(showBackground = true)
 @Composable
