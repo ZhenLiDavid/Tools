@@ -35,6 +35,7 @@ class HfpStreamingService : Service() {
     private var selectedDevice: AudioDeviceInfo? = null
     private var previousAudioMode: Int? = null
     private var routeAnchor: CommunicationRouteAnchor? = null
+    private var speechEqualizer: PodcastSpeechEqualizer? = null
     private var ownsAudioMode = false
     private var communicationDeviceRequested = false
     private var routeConfirmed = false
@@ -161,6 +162,24 @@ class HfpStreamingService : Service() {
             }
             if (!awaitSelectedDevice(device, id) || !isCurrentSession(id)) return
 
+            val equalizer = runCatching { PodcastSpeechEqualizer.create() }
+                .onFailure { exception ->
+                    Log.w(TAG, "Podcast speech equalizer unavailable; using direct HFP route", exception)
+                }
+                .getOrNull()
+            val equalizerAccepted = synchronized(resourceLock) {
+                if (isCurrentSession(id)) {
+                    speechEqualizer = equalizer
+                    true
+                } else {
+                    false
+                }
+            }
+            if (!equalizerAccepted) {
+                equalizer?.close()
+                return
+            }
+
             started = synchronized(resourceLock) {
                 if (!isCurrentSession(id)) {
                     false
@@ -224,18 +243,21 @@ class HfpStreamingService : Service() {
                 RoutingResources(
                     previousMode = previousAudioMode,
                     anchor = routeAnchor,
+                    speechEqualizer = speechEqualizer,
                     ownsAudioMode = ownsAudioMode,
                     communicationDeviceRequested = communicationDeviceRequested,
                 ).also {
                     selectedDevice = null
                     previousAudioMode = null
                     routeAnchor = null
+                    speechEqualizer = null
                     ownsAudioMode = false
                     communicationDeviceRequested = false
                     routeConfirmed = false
                 }
             }
             unregisterAudioMonitoring()
+            resources.speechEqualizer?.close()
             resources.anchor?.close()
             if (resources.communicationDeviceRequested) {
                 runCatching { audioManager.clearCommunicationDevice() }
@@ -312,6 +334,7 @@ class HfpStreamingService : Service() {
     private data class RoutingResources(
         val previousMode: Int?,
         val anchor: CommunicationRouteAnchor?,
+        val speechEqualizer: PodcastSpeechEqualizer?,
         val ownsAudioMode: Boolean,
         val communicationDeviceRequested: Boolean,
     )
