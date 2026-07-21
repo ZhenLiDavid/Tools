@@ -4,9 +4,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import com.zhentech.tools.ui.theme.ToolsTheme
 import org.junit.Assert.assertEquals
@@ -79,7 +81,11 @@ class ToolsGridTest {
         composeRule.onNodeWithText("Work eSIM").assertExists()
         composeRule.onNodeWithText("9:00 AM").assertExists()
         composeRule.onNodeWithText("5:00 PM").assertExists()
-        composeRule.onNodeWithTag(WORK_SIM_SAVE_TEST_TAG).performClick()
+        composeRule.onNodeWithTag(WORK_SIM_SAVE_TEST_TAG)
+            .performScrollTo()
+            .assertIsEnabled()
+            .performClick()
+        composeRule.waitUntil(timeoutMillis = 5_000) { savedSchedule != null }
         composeRule.runOnIdle {
             assertEquals(1, savedSchedule?.slotIndex)
             assertEquals(5, savedSchedule?.days?.size)

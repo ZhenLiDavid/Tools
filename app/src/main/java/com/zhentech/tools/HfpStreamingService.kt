@@ -165,7 +165,7 @@ class HfpStreamingService : Service() {
 
             val equalizer = runCatching { PodcastSpeechEqualizer.create() }
                 .onFailure { exception ->
-                    Log.w(TAG, "Podcast speech equalizer unavailable; using direct HFP route", exception)
+                    Log.w(TAG, "HFP clarity equalizer unavailable; using direct HFP route", exception)
                 }
                 .getOrNull()
             val equalizerAccepted = synchronized(resourceLock) {
@@ -179,6 +179,14 @@ class HfpStreamingService : Service() {
             if (!equalizerAccepted) {
                 equalizer?.close()
                 return
+            }
+            equalizer?.let {
+                Log.i(
+                    TAG,
+                    "HFP clarity EQ active: " + it.bandSettings.joinToString { band ->
+                        "${band.centerFrequencyHz}Hz=${band.levelMillibels / 100f}dB"
+                    },
+                )
             }
 
             started = synchronized(resourceLock) {
