@@ -8,20 +8,10 @@ internal data class SimDescriptor(
     val isEmbedded: Boolean,
 )
 
-internal enum class WorkSimBackendStatus {
-    Simulated,
-    Ready,
-    Applying,
-    AdbUnavailable,
-    Failed,
-}
-
 internal data class WorkSimUiState(
     val schedule: WorkSimSchedule? = null,
     val availableSims: List<SimDescriptor> = emptyList(),
-    val isPoweredOn: Boolean? = null,
     val nextTransition: WorkSimTransition? = null,
-    val backendStatus: WorkSimBackendStatus = WorkSimBackendStatus.Ready,
     val preciseSchedulingAvailable: Boolean = true,
 ) {
     val isConfigured: Boolean
@@ -37,9 +27,7 @@ internal data class WorkSimUiState(
                 SimDescriptor(0, "Personal SIM", false),
                 SimDescriptor(1, "Work eSIM", true),
             ),
-            isPoweredOn = schedule.isActiveAt(now),
             nextTransition = schedule.nextTransitionAfter(now),
-            backendStatus = WorkSimBackendStatus.Simulated,
         )
     }
 }

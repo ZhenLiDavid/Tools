@@ -3,13 +3,14 @@ package com.zhentech.tools
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.net.toUri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -69,6 +70,12 @@ class MainActivity : ComponentActivity() {
         showWorkSimEditor = true
     }
 
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        requestExactAlarmAccessIfNeeded()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -94,11 +101,6 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (::workSimController.isInitialized) workSimController.refresh()
-    }
-
-    override fun onDestroy() {
-        if (::workSimController.isInitialized) workSimController.close()
-        super.onDestroy()
     }
 
     private fun onStreamingTileClick() {
@@ -129,11 +131,25 @@ class MainActivity : ComponentActivity() {
     private fun onWorkSimScheduleSave(schedule: WorkSimSchedule) {
         showWorkSimEditor = false
         workSimController.save(schedule)
-        if (schedule.enabled && !workSimController.state.value.preciseSchedulingAvailable) {
+        if (!schedule.enabled) return
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            requestExactAlarmAccessIfNeeded()
+        }
+    }
+
+    private fun requestExactAlarmAccessIfNeeded() {
+        if (workSimController.state.value.schedule?.enabled == true &&
+            !workSimController.state.value.preciseSchedulingAvailable
+        ) {
             startActivity(
                 Intent(
                     Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,
-                    Uri.parse("package:$packageName"),
+                    "package:$packageName".toUri(),
                 ),
             )
         }
@@ -148,12 +164,12 @@ class MainActivity : ComponentActivity() {
 internal fun ToolsGrid(
     streamingState: StreamingState,
     onStreamingTileClick: () -> Unit,
+    modifier: Modifier = Modifier,
     workSimState: WorkSimUiState = WorkSimUiState(),
     onWorkSimTileClick: () -> Unit = {},
     showWorkSimEditor: Boolean = false,
     onWorkSimEditorDismiss: () -> Unit = {},
     onWorkSimScheduleSave: (WorkSimSchedule) -> Unit = {},
-    modifier: Modifier = Modifier,
 ) {
     val layoutDirection = LocalLayoutDirection.current
     Scaffold(

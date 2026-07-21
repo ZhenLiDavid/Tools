@@ -17,6 +17,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -340,10 +341,9 @@ class HfpStreamingService : Service() {
     )
 
     private fun setStreamingRequested(requested: Boolean) {
-        getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE)
-            .edit()
-            .putBoolean(KEY_STREAMING_REQUESTED, requested)
-            .apply()
+        getSharedPreferences(PREFERENCES_NAME, MODE_PRIVATE).edit {
+            putBoolean(KEY_STREAMING_REQUESTED, requested)
+        }
     }
 
     private fun isStreamingRequested(): Boolean =

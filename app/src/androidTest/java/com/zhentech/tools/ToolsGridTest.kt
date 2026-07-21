@@ -74,6 +74,8 @@ class ToolsGridTest {
         composeRule.onNodeWithTag(WORK_SIM_TILE_TEST_TAG).performClick()
 
         composeRule.onNodeWithTag(WORK_SIM_EDITOR_TEST_TAG).assertExists()
+        composeRule.onNodeWithText("Weekly reminder").assertExists()
+        composeRule.onNodeWithText("SIM settings will open at the selected times").assertExists()
         composeRule.onNodeWithText("Work eSIM").assertExists()
         composeRule.onNodeWithText("9:00 AM").assertExists()
         composeRule.onNodeWithText("5:00 PM").assertExists()

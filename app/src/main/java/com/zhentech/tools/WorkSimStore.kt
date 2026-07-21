@@ -2,6 +2,7 @@ package com.zhentech.tools
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import java.time.DayOfWeek
 import java.time.LocalTime
 
@@ -29,34 +30,16 @@ internal class WorkSimStore(context: Context) {
     }
 
     fun writeSchedule(schedule: WorkSimSchedule) {
-        preferences.edit()
-            .putBoolean(KEY_CONFIGURED, true)
-            .putBoolean(KEY_ENABLED, schedule.enabled)
-            .putInt(KEY_SLOT, schedule.slotIndex)
-            .putString(KEY_LABEL, schedule.simLabel)
-            .putBoolean(KEY_EMBEDDED, schedule.isEmbedded)
-            .putInt(KEY_DAYS, encodeDays(schedule.days))
-            .putInt(KEY_START_MINUTES, schedule.start.hour * 60 + schedule.start.minute)
-            .putInt(KEY_END_MINUTES, schedule.end.hour * 60 + schedule.end.minute)
-            .apply()
-    }
-
-    fun readLastPowerState(): Boolean? = when {
-        !preferences.contains(KEY_LAST_POWER_STATE) -> null
-        else -> preferences.getBoolean(KEY_LAST_POWER_STATE, false)
-    }
-
-    fun writeLastPowerState(enabled: Boolean) {
-        preferences.edit().putBoolean(KEY_LAST_POWER_STATE, enabled).apply()
-    }
-
-    fun readBackendStatus(default: WorkSimBackendStatus): WorkSimBackendStatus =
-        preferences.getString(KEY_BACKEND_STATUS, null)
-            ?.let { stored -> WorkSimBackendStatus.entries.firstOrNull { it.name == stored } }
-            ?: default
-
-    fun writeBackendStatus(status: WorkSimBackendStatus) {
-        preferences.edit().putString(KEY_BACKEND_STATUS, status.name).apply()
+        preferences.edit {
+            putBoolean(KEY_CONFIGURED, true)
+            putBoolean(KEY_ENABLED, schedule.enabled)
+            putInt(KEY_SLOT, schedule.slotIndex)
+            putString(KEY_LABEL, schedule.simLabel)
+            putBoolean(KEY_EMBEDDED, schedule.isEmbedded)
+            putInt(KEY_DAYS, encodeDays(schedule.days))
+            putInt(KEY_START_MINUTES, schedule.start.hour * 60 + schedule.start.minute)
+            putInt(KEY_END_MINUTES, schedule.end.hour * 60 + schedule.end.minute)
+        }
     }
 
     private fun encodeDays(days: Set<DayOfWeek>): Int =
@@ -77,8 +60,6 @@ internal class WorkSimStore(context: Context) {
         const val KEY_DAYS = "days"
         const val KEY_START_MINUTES = "start_minutes"
         const val KEY_END_MINUTES = "end_minutes"
-        const val KEY_LAST_POWER_STATE = "last_power_state"
-        const val KEY_BACKEND_STATUS = "backend_status"
         const val DEFAULT_WEEKDAYS = 0b0011111
     }
 }

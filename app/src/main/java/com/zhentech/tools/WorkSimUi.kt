@@ -58,9 +58,8 @@ internal fun WorkSimTile(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val isOn = state.isPoweredOn ?: state.schedule?.isActiveAt(ZonedDateTime.now())
-    val (containerColor, contentColor) = workSimTileColors(state, isOn)
-    val status = workSimTileStatus(state, isOn)
+    val (containerColor, contentColor) = workSimTileColors(state)
+    val status = workSimTileStatus(state)
 
     Box(
         modifier = modifier
@@ -106,42 +105,34 @@ internal fun WorkSimTile(
 @Composable
 private fun workSimTileColors(
     state: WorkSimUiState,
-    isOn: Boolean?,
 ): Pair<Color, Color> = when {
-    state.backendStatus == WorkSimBackendStatus.AdbUnavailable ||
-        state.backendStatus == WorkSimBackendStatus.Failed ->
-        MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
-    isOn == true -> MaterialTheme.colorScheme.primary to MaterialTheme.colorScheme.onPrimary
+    state.schedule?.enabled == true ->
+        MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
     state.isConfigured ->
         MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
     else ->
         MaterialTheme.colorScheme.secondaryContainer to MaterialTheme.colorScheme.onSecondaryContainer
 }
 
-private fun workSimTileStatus(state: WorkSimUiState, isOn: Boolean?): String {
+private fun workSimTileStatus(state: WorkSimUiState): String {
     val schedule = state.schedule
     return when {
         !state.isConfigured -> "Set schedule"
-        state.backendStatus == WorkSimBackendStatus.Applying -> "Updating…"
-        state.backendStatus == WorkSimBackendStatus.AdbUnavailable -> "Reconnect ADB"
-        state.backendStatus == WorkSimBackendStatus.Failed -> "Switch failed"
         schedule?.enabled == false -> "Schedule paused"
-        state.nextTransition != null -> {
-            val stateLabel = if (isOn == true) "On" else "Off"
-            "$stateLabel · ${formatTransition(state.nextTransition)}"
-        }
-        else -> if (isOn == true) "On" else "Off"
+        state.nextTransition != null -> formatTransition(state.nextTransition)
+        else -> "No reminder"
     }
 }
 
 private fun formatTransition(transition: WorkSimTransition): String {
     val now = ZonedDateTime.now(transition.at.zone)
     val time = transition.at.format(DateTimeFormatter.ofPattern("h:mm a"))
+    val action = if (transition.powersOn) "On" else "Off"
     return if (transition.isSoonAfter(now)) {
-        "until $time"
+        "$action at $time"
     } else {
         val day = transition.at.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault())
-        "$day $time"
+        "$action $day $time"
     }
 }
 
@@ -193,10 +184,14 @@ internal fun WorkSimEditorSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Column {
-                    Text("Weekly schedule", style = MaterialTheme.typography.titleMedium)
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Weekly reminder", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        if (draft.enabled) "Automatic switching is on" else "Automatic switching is paused",
+                        if (draft.enabled) {
+                            "SIM settings will open at the selected times"
+                        } else {
+                            "SIM settings reminders are paused"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -269,14 +264,6 @@ internal fun WorkSimEditorSheet(
                 Text(
                     text = "Android will ask for exact-alarm access when you save.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-
-            if (state.backendStatus == WorkSimBackendStatus.AdbUnavailable) {
-                Text(
-                    text = "ADB Wi-Fi needs to be reconnected before the SIM can switch.",
-                    color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
