@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="hfp_widget_active_background">#6750A4</color>
+    <color name="hfp_widget_active_content">#FFFFFF</color>
+    <color name="hfp_widget_inactive_background">#E8DEF8</color>
+    <color name="hfp_widget_inactive_content">#1D192B</color>
+</resources>

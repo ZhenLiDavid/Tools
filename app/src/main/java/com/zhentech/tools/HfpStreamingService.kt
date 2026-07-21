@@ -199,6 +199,7 @@ class HfpStreamingService : Service() {
                 }
             }
             if (started) {
+                HfpStreamingWidget.updateAll(this, StreamingState.On)
                 anchor.pumpWhile { isCurrentSession(id) }
             }
         } catch (exception: Exception) {
@@ -247,6 +248,7 @@ class HfpStreamingService : Service() {
             if (clearRequest) setStreamingRequested(false)
             sessionId.incrementAndGet()
             AppStreamingState.store.markStopped()
+            HfpStreamingWidget.updateAll(this, StreamingState.Off)
 
             val resources = synchronized(resourceLock) {
                 RoutingResources(
@@ -380,5 +382,20 @@ class HfpStreamingService : Service() {
                 Intent(context, HfpStreamingService::class.java).setAction(ACTION_STOP),
             )
         }
+
+        internal fun startPendingIntent(context: Context): PendingIntent =
+            PendingIntent.getForegroundService(
+                context,
+                1,
+                Intent(context, HfpStreamingService::class.java).setAction(ACTION_START),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+        internal fun stopPendingIntent(context: Context): PendingIntent = PendingIntent.getService(
+            context,
+            2,
+            Intent(context, HfpStreamingService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
     }
 }

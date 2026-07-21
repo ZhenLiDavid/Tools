@@ -101,6 +101,10 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         if (::workSimController.isInitialized) workSimController.refresh()
+        if (intent.action == HfpStreamingWidget.ACTION_REQUEST_PERMISSION_AND_START) {
+            intent.action = null
+            onStreamingTileClick()
+        }
     }
 
     private fun onStreamingTileClick() {

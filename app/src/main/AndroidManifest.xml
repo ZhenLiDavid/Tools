@@ -52,6 +52,19 @@
             android:stopWithTask="false" />
 
         <receiver
+            android:name=".HfpStreamingWidget"
+            android:exported="true"
+            android:label="@string/hfp_widget_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/hfp_streaming_widget_info" />
+        </receiver>
+
+        <receiver
             android:name=".WorkSimAlarmReceiver"
             android:exported="false">
             <intent-filter>

@@ -3,4 +3,10 @@
     <string name="streaming_notification_channel_name">HFP streaming</string>
     <string name="streaming_notification_title">Streaming on</string>
     <string name="streaming_notification_stop">Stop</string>
+    <string name="hfp_widget_name">BT audio stream</string>
+    <string name="hfp_widget_description">Start or stop Bluetooth call-audio streaming</string>
+    <string name="hfp_widget_streaming_off">Streaming</string>
+    <string name="hfp_widget_streaming_on">Streaming on</string>
+    <string name="hfp_widget_start_streaming">Start streaming</string>
+    <string name="hfp_widget_stop_streaming">Stop streaming</string>
 </resources>
